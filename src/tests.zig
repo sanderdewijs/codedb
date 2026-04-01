@@ -3883,6 +3883,7 @@ test "issue-php-13: PHP nested braces in methods do not break class tracking" {
         \\    {
         \\        if ($x) {
         \\            foreach ($items as $item) {
+        \\                echo "}";
         \\            }
         \\        }
         \\    }
