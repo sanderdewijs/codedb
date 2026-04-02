@@ -369,6 +369,17 @@ fn incrementalDiff(store: *Store, explorer: *Explorer, queue: *EventQueue, known
             // Mtime unchanged -> skip (cheap path, no IO)
             if (old.mtime == mtime) continue;
 
+            // If this file was recently edited via the API, the Store and Explorer
+            // are already up-to-date. Just update known-file metadata to suppress
+            // a redundant re-index on the next cycle.
+            if (store.consumeRecentEdit(entry.path)) {
+                const hash = hashFile(dir, entry.path, stat.size) catch 0;
+                old.mtime = mtime;
+                old.size = stat.size;
+                old.hash = hash;
+                continue;
+            }
+
             // Size changed -> definitely changed, skip expensive hash.
             var hash: u64 = 0;
             if (old.size == stat.size) {

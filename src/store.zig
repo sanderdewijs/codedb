@@ -20,16 +20,19 @@ pub const Store = struct {
     mu: std.Thread.Mutex = .{},
     data_log: ?std.fs.File = null,
     data_log_pos: u64 = 0,
+    pending_edits: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
             .files = std.StringHashMap(FileVersions).init(allocator),
             .seq = std.atomic.Value(u64).init(0),
             .allocator = allocator,
+            .pending_edits = std.StringHashMap(void).init(allocator),
         };
     }
 
     pub fn deinit(self: *Store) void {
+        self.pending_edits.deinit();
         var iter = self.files.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.path);
@@ -37,6 +40,20 @@ pub const Store = struct {
         }
         self.files.deinit();
         if (self.data_log) |f| f.close();
+    }
+
+    pub fn markRecentEdit(self: *Store, path: []const u8) void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        if (self.files.getEntry(path)) |entry| {
+            self.pending_edits.put(entry.key_ptr.*, {}) catch {};
+        }
+    }
+
+    pub fn consumeRecentEdit(self: *Store, path: []const u8) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.pending_edits.remove(path);
     }
 
     pub fn openDataLog(self: *Store, path: []const u8) !void {

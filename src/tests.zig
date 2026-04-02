@@ -154,6 +154,34 @@ test "store: recordEdit persists diff data to data log" {
     try testing.expectEqualStrings(diff, buf[0..diff.len]);
 }
 
+test "store: markRecentEdit suppresses duplicate watcher processing" {
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    _ = try store.recordSnapshot("app.zig", 100, 0xABC);
+
+    // Before marking, consumeRecentEdit returns false
+    try testing.expect(!store.consumeRecentEdit("app.zig"));
+
+    // Mark as recently edited via API
+    store.markRecentEdit("app.zig");
+
+    // First consume returns true
+    try testing.expect(store.consumeRecentEdit("app.zig"));
+
+    // Second consume returns false (already consumed)
+    try testing.expect(!store.consumeRecentEdit("app.zig"));
+}
+
+test "store: markRecentEdit for unknown path is no-op" {
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    // Path not in files map — should silently do nothing
+    store.markRecentEdit("nonexistent.zig");
+    try testing.expect(!store.consumeRecentEdit("nonexistent.zig"));
+}
+
 // ── Agent tests ─────────────────────────────────────────────
 
 test "agent: register and heartbeat" {

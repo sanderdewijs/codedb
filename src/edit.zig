@@ -110,6 +110,7 @@ pub fn applyEdit(
     // in the store. This leaves the disk and store inconsistent. Recovery would require
     // re-reading the file and re-recording, or a crash-recovery scan at startup.
     const seq = try store.recordEdit(req.path, req.agent_id, req.op, hash, result.len, req.content);
+    store.markRecentEdit(req.path);
     if (explorer) |exp| {
         try exp.indexFile(req.path, result);
     }
