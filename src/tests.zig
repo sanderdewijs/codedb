@@ -243,6 +243,46 @@ test "agent: reapStale frees lock keys and clears map" {
     try testing.expect(agent.state == .crashed);
     try testing.expect(agent.locked_paths.count() == 0);
 }
+
+test "agent: MCP sessions get unique agent IDs" {
+    var agents = AgentRegistry.init(testing.allocator);
+    defer agents.deinit();
+
+    const session1 = try agents.register("mcp-session");
+    const session2 = try agents.register("mcp-session");
+    const session3 = try agents.register("mcp-session");
+
+    try testing.expect(session1 != session2);
+    try testing.expect(session2 != session3);
+    try testing.expect(session1 != session3);
+
+    const a1 = agents.agents.getPtr(session1) orelse return error.TestUnexpectedResult;
+    const a2 = agents.agents.getPtr(session2) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("mcp-session", a1.name);
+    try testing.expectEqualStrings("mcp-session", a2.name);
+}
+
+test "agent: concurrent MCP sessions have independent locks" {
+    var agents = AgentRegistry.init(testing.allocator);
+    defer agents.deinit();
+
+    const session_a = try agents.register("mcp-session");
+    const session_b = try agents.register("mcp-session");
+
+    try testing.expect(try agents.tryLock(session_a, "app.zig", 60_000));
+    try testing.expect(try agents.tryLock(session_a, "lib.zig", 60_000));
+
+    // Session B can't lock files held by session A
+    try testing.expect(!try agents.tryLock(session_b, "app.zig", 60_000));
+
+    // Session B can lock a different file
+    try testing.expect(try agents.tryLock(session_b, "other.zig", 60_000));
+
+    // After A releases, B can acquire
+    agents.releaseLock(session_a, "app.zig");
+    try testing.expect(try agents.tryLock(session_b, "app.zig", 60_000));
+}
+
 // ── Word index tests ────────────────────────────────────────
 
 test "word tokenizer" {

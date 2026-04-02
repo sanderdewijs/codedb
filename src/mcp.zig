@@ -10,7 +10,9 @@ const Root = mcp_lib.mcp.Root;
 const Store = @import("store.zig").Store;
 const explore_mod = @import("explore.zig");
 const Explorer = explore_mod.Explorer;
-const AgentRegistry = @import("agent.zig").AgentRegistry;
+const agent_mod = @import("agent.zig");
+const AgentRegistry = agent_mod.AgentRegistry;
+const AgentId = agent_mod.AgentId;
 const snapshot_json = @import("snapshot_json.zig");
 const watcher = @import("watcher.zig");
 const edit_mod = @import("edit.zig");
@@ -297,6 +299,7 @@ const Session = struct {
     alloc: std.mem.Allocator,
     stdout: std.fs.File,
     next_id: i64 = 100,
+    agent_id: AgentId = 0,
     client_supports_roots: bool = false,
     client_roots_list_changed: bool = false,
     pending_roots_id: ?i64 = null,
@@ -334,6 +337,7 @@ pub fn run(
     var session = Session{
         .alloc = alloc,
         .stdout = stdout,
+        .agent_id = agents.register("mcp-session") catch 1,
     };
     defer session.deinit();
 
@@ -383,7 +387,7 @@ pub fn run(
         } else if (mcpj.eql(method, "tools/list")) {
             if (!is_notification) writeResult(alloc, stdout, id, tools_list);
         } else if (mcpj.eql(method, "tools/call")) {
-            handleCall(alloc, root, stdout, id, store, explorer, agents, &cache, telem);
+            handleCall(alloc, root, stdout, id, store, explorer, agents, &cache, telem, session.agent_id);
         } else if (mcpj.eql(method, "ping")) {
             if (!is_notification) writeResult(alloc, stdout, id, "{}");
         } else {
@@ -485,6 +489,7 @@ fn handleCall(
     agents: *AgentRegistry,
     cache: *ProjectCache,
     telem: *telemetry_mod.Telemetry,
+    agent_id: AgentId,
 ) void {
     const is_notification = id == null;
 
@@ -518,7 +523,7 @@ fn handleCall(
     defer out.deinit(alloc);
 
     const t0 = std.time.nanoTimestamp();
-    dispatch(alloc, tool, args, &out, store, explorer, agents, cache);
+    dispatch(alloc, tool, args, &out, store, explorer, agents, cache, agent_id);
     const elapsed = std.time.nanoTimestamp() - t0;
 
     const is_error = std.mem.startsWith(u8, out.items, "error:");
@@ -576,6 +581,7 @@ fn dispatch(
     default_explorer: *Explorer,
     agents: *AgentRegistry,
     cache: *ProjectCache,
+    agent_id: AgentId,
 ) void {
     const project_path = getStr(args, "project");
     const ctx = cache.get(project_path, default_explorer, default_store) catch |err| {
@@ -593,11 +599,11 @@ fn dispatch(
         .codedb_hot => handleHot(alloc, args, out, ctx.store, ctx.explorer),
         .codedb_deps => handleDeps(alloc, args, out, ctx.explorer),
         .codedb_read => handleRead(alloc, args, out, ctx.explorer),
-        .codedb_edit => handleEdit(alloc, args, out, default_store, default_explorer, agents),
+        .codedb_edit => handleEdit(alloc, args, out, default_store, default_explorer, agents, agent_id),
         .codedb_changes => handleChanges(alloc, args, out, default_store),
         .codedb_status => handleStatus(alloc, out, ctx.store, ctx.explorer),
         .codedb_snapshot => handleSnapshot(alloc, out, ctx.explorer, ctx.store),
-        .codedb_bundle => handleBundle(alloc, args, out, ctx.store, ctx.explorer, agents, cache),
+        .codedb_bundle => handleBundle(alloc, args, out, ctx.store, ctx.explorer, agents, cache, agent_id),
         .codedb_remote => handleRemote(alloc, args, out),
         .codedb_projects => handleProjects(alloc, out),
         .codedb_index => handleIndex(alloc, args, out),
@@ -872,7 +878,7 @@ fn handleRead(alloc: std.mem.Allocator, args: *const std.json.ObjectMap, out: *s
     }
 }
 
-fn handleEdit(alloc: std.mem.Allocator, args: *const std.json.ObjectMap, out: *std.ArrayList(u8), store: *Store, explorer: *Explorer, agents: *AgentRegistry) void {
+fn handleEdit(alloc: std.mem.Allocator, args: *const std.json.ObjectMap, out: *std.ArrayList(u8), store: *Store, explorer: *Explorer, agents: *AgentRegistry, agent_id: AgentId) void {
     const path = getStr(args, "path") orelse {
         out.appendSlice(alloc, "error: missing 'path'") catch {};
         return;
@@ -898,13 +904,9 @@ fn handleEdit(alloc: std.mem.Allocator, args: *const std.json.ObjectMap, out: *s
     const range_end = getInt(args, "range_end");
     const after = getInt(args, "after");
 
-    // Use agent 1 (the __filesystem__ agent registered at startup).
-    // TODO: agent_id is hardcoded to 1 — two MCP clients share the same agent_id and
-    // could both acquire locks on different files without conflict, but cannot detect
-    // concurrent edits to the same file from separate connections.
     var req = edit_mod.EditRequest{
         .path = path,
-        .agent_id = 1,
+        .agent_id = agent_id,
         .op = op,
         .content = content,
     };
@@ -977,6 +979,7 @@ fn handleBundle(
     default_explorer: *Explorer,
     agents: *AgentRegistry,
     cache: *ProjectCache,
+    agent_id: AgentId,
 ) void {
     const ops_val = args.get("ops") orelse {
         out.appendSlice(alloc, "error: missing 'ops' argument") catch {};
@@ -1037,7 +1040,7 @@ fn handleBundle(
         var sub_out: std.ArrayList(u8) = .{};
         defer sub_out.deinit(alloc);
 
-        dispatch(alloc, tool, sub_args, &sub_out, default_store, default_explorer, agents, cache);
+        dispatch(alloc, tool, sub_args, &sub_out, default_store, default_explorer, agents, cache, agent_id);
 
         w.print("--- [{d}] {s} ---\n", .{ i, tool_name }) catch {};
         out.appendSlice(alloc, sub_out.items) catch {};
