@@ -261,6 +261,7 @@ pub const Tool = enum {
     codedb_remote,
     codedb_projects,
     codedb_index,
+    codedb_history,
 };
 
 const tools_list =
@@ -280,7 +281,8 @@ const tools_list =
     \\{"name":"codedb_bundle","description":"Execute multiple read-only intelligence queries in a single call. Combines outline, symbol, search, read, deps, and other indexed operations. Saves round-trips. Max 20 ops.","inputSchema":{"type":"object","properties":{"ops":{"type":"array","items":{"type":"object","properties":{"tool":{"type":"string","description":"Tool name (e.g. codedb_outline, codedb_symbol, codedb_read)"},"arguments":{"type":"object","description":"Tool arguments"}},"required":["tool"]},"description":"Array of tool calls to execute"},"project":{"type":"string","description":"Optional absolute path to a different project (must have codedb.snapshot)"}},"required":["ops"]}},
     \\{"name":"codedb_remote","description":"Query any GitHub repo via codedb.codegraff.com cloud intelligence. Gets file tree, symbol outlines, or searches code in external repos without cloning. Use when you need to understand a dependency, check an external API, or explore a repo you don't have locally.","inputSchema":{"type":"object","properties":{"repo":{"type":"string","description":"GitHub repo in owner/repo format (e.g. justrach/merjs)"},"action":{"type":"string","enum":["tree","outline","search","meta"],"description":"What to query: tree (file list), outline (symbols), search (text search), meta (repo info)"},"query":{"type":"string","description":"Search query (required when action=search)"}},"required":["repo","action"]}},
     \\{"name":"codedb_projects","description":"List all locally indexed projects on this machine. Shows project paths, data directory hashes, and whether a snapshot exists. Use to discover what codebases are available.","inputSchema":{"type":"object","properties":{},"required":[]}},
-    \\{"name":"codedb_index","description":"Index a local folder on this machine. Scans all source files, builds outlines/trigrams/word indexes, and creates a codedb.snapshot in the target directory. After indexing, the folder is queryable via the project param on any tool.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Absolute path to the folder to index (e.g. /Users/you/myproject)"}},"required":["path"]}}
+    \\{"name":"codedb_index","description":"Index a local folder on this machine. Scans all source files, builds outlines/trigrams/word indexes, and creates a codedb.snapshot in the target directory. After indexing, the folder is queryable via the project param on any tool.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Absolute path to the folder to index (e.g. /Users/you/myproject)"}},"required":["path"]}},
+    \\{"name":"codedb_history","description":"Get the version history for a specific file. Shows all recorded versions with sequence numbers, timestamps, operations (snapshot/replace/insert/delete), agent IDs, and file sizes. Use to understand how a file evolved over time or to find a specific version.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"File path relative to project root"},"cursor":{"type":"integer","description":"Optional: get the version at or before this sequence number instead of full history"}},"required":["path"]}}
     \\]}
 ;
 
@@ -607,6 +609,7 @@ fn dispatch(
         .codedb_remote => handleRemote(alloc, args, out),
         .codedb_projects => handleProjects(alloc, out),
         .codedb_index => handleIndex(alloc, args, out),
+        .codedb_history => handleHistory(alloc, args, out, ctx.store),
     }
 }
 
@@ -947,6 +950,43 @@ fn handleChanges(alloc: std.mem.Allocator, args: *const std.json.ObjectMap, out:
     w.print("seq: {d}, {d} files changed since {d}:\n", .{ store.currentSeq(), changes.len, since }) catch {};
     for (changes) |c| {
         w.print("  {s} (seq={d}, op={s}, size={d})\n", .{ c.path, c.seq, @tagName(c.op), c.size }) catch {};
+    }
+}
+
+fn handleHistory(alloc: std.mem.Allocator, args: *const std.json.ObjectMap, out: *std.ArrayList(u8), store: *Store) void {
+    const path = getStr(args, "path") orelse {
+        out.appendSlice(alloc, "error: missing 'path'") catch {};
+        return;
+    };
+
+    const cursor = getInt(args, "cursor");
+    if (cursor) |c| {
+        if (c < 0) {
+            out.appendSlice(alloc, "error: 'cursor' must be positive") catch {};
+            return;
+        }
+        const version = store.getAtCursor(path, @intCast(c)) orelse {
+            out.appendSlice(alloc, "error: no version found at or before this cursor") catch {};
+            return;
+        };
+        const w = out.writer(alloc);
+        w.print("version at cursor {d}:\n  seq={d} op={s} agent={d} size={d} hash={x} ts={d}\n", .{
+            c, version.seq, @tagName(version.op), version.agent, version.size, version.hash, version.timestamp,
+        }) catch {};
+        return;
+    }
+
+    const history = store.getHistory(path) orelse {
+        out.appendSlice(alloc, "error: no history for this path") catch {};
+        return;
+    };
+
+    const w = out.writer(alloc);
+    w.print("{s}: {d} versions\n", .{ path, history.len }) catch {};
+    for (history) |v| {
+        w.print("  seq={d} op={s} agent={d} size={d} hash={x} ts={d}\n", .{
+            v.seq, @tagName(v.op), v.agent, v.size, v.hash, v.timestamp,
+        }) catch {};
     }
 }
 

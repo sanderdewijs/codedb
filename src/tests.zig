@@ -173,6 +173,29 @@ test "store: markRecentEdit suppresses duplicate watcher processing" {
     try testing.expect(!store.consumeRecentEdit("app.zig"));
 }
 
+test "store: getHistory returns full version chain" {
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    _ = try store.recordSnapshot("main.zig", 100, 0xAA);
+    _ = try store.recordEdit("main.zig", 2, .replace, 0xBB, 120, null);
+    _ = try store.recordEdit("main.zig", 2, .insert, 0xCC, 150, null);
+
+    const history = store.getHistory("main.zig") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 3), history.len);
+    try testing.expectEqual(version.Op.snapshot, history[0].op);
+    try testing.expectEqual(version.Op.replace, history[1].op);
+    try testing.expectEqual(version.Op.insert, history[2].op);
+    try testing.expectEqual(@as(u64, 0xCC), history[2].hash);
+}
+
+test "store: getHistory returns null for unknown path" {
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    try testing.expect(store.getHistory("nonexistent.zig") == null);
+}
+
 test "store: markRecentEdit for unknown path is no-op" {
     var store = Store.init(testing.allocator);
     defer store.deinit();

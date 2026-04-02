@@ -158,6 +158,14 @@ pub const Store = struct {
         return fv.atCursor(cursor);
     }
 
+    pub fn getHistory(self: *Store, path: []const u8) ?[]const Version {
+        self.mu.lock();
+        defer self.mu.unlock();
+        const fv = self.files.get(path) orelse return null;
+        if (fv.versions.items.len == 0) return null;
+        return fv.versions.items;
+    }
+
     pub fn changesSince(self: *Store, since: u64) u64 {
         self.mu.lock();
         defer self.mu.unlock();
